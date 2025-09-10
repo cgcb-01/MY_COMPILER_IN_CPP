@@ -1,405 +1,371 @@
-#include <iostream>
-#include <vector>
-#include <string>
-#include <set>
-#include <map>
-#include <stack>
-#include <iomanip>
-#include <algorithm>
-#include <cctype>
+#include <bits/stdc++.h>
+using namespace std;
 
-// Use '#' to represent epsilon
-const char END_MARKER = '!';
-
-// Represents a production rule: (1) A -> rule
 struct Production {
-    int number;
-    char nonTerminal;
-    std::string rule;
+    int id;
+    string lhs;
+    vector<string> rhs;
 };
 
-class LL1Parser {
-private:
-    std::vector<Production> grammar;
-    std::set<char> nonTerminals;
-    std::set<char> terminals;
-    char originalStartSymbol;
-    char augmentedStartSymbol = 'Z'; 
+string EPSILON = "#";
 
-    std::map<char, bool> nullable;
-    std::map<char, std::set<char>> firstSets;
-    std::map<char, std::set<char>> followSets;
-    std::map<char, std::map<char, int>> parseTable; // Stores production numbers
+vector<Production> prods;
+set<string> nonterms;
+set<string> terms;
+map<string,bool> nullable;
+map<string,set<string>> first;
+map<string,set<string>> follow;
+map<string,map<string,int>> M;
 
-    void findAugmentedSymbol() {
-        std::set<char> allSymbols;
-        for(const auto& prod : grammar) {
-            allSymbols.insert(prod.nonTerminal);
-            for(char c : prod.rule) allSymbols.insert(c);
+vector<string> tokenizeRHS(const string &rhsRaw) {
+    vector<string> tokens;
+    for (size_t i = 0; i < rhsRaw.size(); i++) {
+        if (rhsRaw[i] == '#') {
+            tokens.push_back(EPSILON);
+            continue;
         }
-        char temp = 'Z';
-        while (temp >= 'A') {
-            if (allSymbols.find(temp) == allSymbols.end()) {
-                augmentedStartSymbol = temp;
-                return;
+        char c = rhsRaw[i];
+        if (isupper((unsigned char)c)) {
+            string tok(1, c);
+            if (i+1 < rhsRaw.size() && rhsRaw[i+1] == '\'') {
+                tok.push_back('\'');
+                i++;
             }
-            temp--;
+            tokens.push_back(tok);
+            nonterms.insert(tok);
+        } else {
+            string tok(1, c);
+            tokens.push_back(tok);
+            terms.insert(tok);
         }
-        augmentedStartSymbol = '^'; 
     }
+    if (tokens.empty()) tokens.push_back(EPSILON);
+    return tokens;
+}
 
-    bool isNonTerminal(char c) {
-        return nonTerminals.count(c);
+string joinSet(const set<string> &s) {
+    string out;
+    bool first = true;
+    for (auto &e : s) {
+        if (!first) out += ",";
+        out += e;
+        first = false;
     }
+    if (out.empty()) out = "-";
+    return out;
+}
 
-    bool isStringNullable(const std::string& s) {
-        if (s.empty() || s == "#") return true;
-        for (char c : s) {
-            if (isNonTerminal(c)) {
-                if (nullable.find(c) == nullable.end() || !nullable.at(c)) {
-                    return false;
-                }
-            } else { 
-                return false;
+void computeNullable() {
+    for (auto &nt : nonterms) nullable[nt] = false;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto &p : prods) {
+            bool allNull = true;
+            if (p.rhs.size() == 1 && p.rhs[0] == EPSILON) {
+                if (!nullable[p.lhs]) { nullable[p.lhs] = true; changed = true; }
+                continue;
             }
-        }
-        return true;
-    }
-    
-    void printHorizontalLine(const std::vector<int>& widths) {
-        std::cout << "+";
-        for (int w : widths) {
-            std::cout << std::string(w - 1, '-') << "+";
-        }
-        std::cout << std::endl;
-    }
-
-    void printRow(const std::vector<std::string>& cells, const std::vector<int>& widths) {
-        std::cout << "|";
-        for (size_t i = 0; i < cells.size(); ++i) {
-            std::cout << " " << std::left << std::setw(widths[i] - 2) << cells[i] << "|";
-        }
-        std::cout << std::endl;
-    }
-
-
-public:
-    LL1Parser() : originalStartSymbol('\0') {}
-
-    void addProduction(const std::string& prodStr) {
-        if (prodStr.length() < 3 || prodStr.substr(1, 2) != "->") return;
-        char nt = prodStr[0];
-        std::string rule = prodStr.substr(3);
-        if (!isupper(nt)) return;
-        grammar.push_back({(int)grammar.size() + 1, nt, rule});
-        nonTerminals.insert(nt);
-        for(char c : rule){
-            if(isupper(c)) nonTerminals.insert(c);
-        }
-    }
-
-    void setStartSymbol(char start) {
-        bool found = false;
-        for(const auto& prod : grammar){ if(prod.nonTerminal == start) found = true; }
-        if (!found){ std::cerr << "Error: Start symbol '" << start << "' not found. Exiting." << std::endl; exit(1); }
-        originalStartSymbol = start;
-    }
-    
-    void initializeGrammar() {
-        if (originalStartSymbol == '\0') { std::cerr << "Error: Start symbol not set. Exiting." << std::endl; exit(1); }
-        findAugmentedSymbol();
-        grammar.insert(grammar.begin(), {0, augmentedStartSymbol, std::string(1, originalStartSymbol)});
-        nonTerminals.insert(augmentedStartSymbol);
-
-        for (const auto& prod : grammar) {
-            for (char c : prod.rule) {
-                if (!isupper(c) && c != '#') terminals.insert(c);
+            for (auto &sym : p.rhs) {
+                if (sym == EPSILON) continue;
+                if (nonterms.count(sym)) {
+                    if (!nullable[sym]) { allNull = false; break; }
+                } else { allNull = false; break; }
+            }
+            if (allNull && !nullable[p.lhs]) {
+                nullable[p.lhs] = true;
+                changed = true;
             }
         }
     }
+}
 
-    void computeNullability() {
-        for (char nt : nonTerminals) nullable[nt] = false;
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            for (const auto& prod : grammar) {
-                if (!nullable[prod.nonTerminal] && isStringNullable(prod.rule)) {
-                    nullable[prod.nonTerminal] = true;
+set<string> firstOfSequence(const vector<string> &seq) {
+    set<string> res;
+    if (seq.empty()) {
+        res.insert(EPSILON);
+        return res;
+    }
+    bool allNullSoFar = true;
+    for (size_t i = 0; i < seq.size(); i++) {
+        string sym = seq[i];
+        if (sym == EPSILON) {
+            res.insert(EPSILON);
+            allNullSoFar = true;
+            break;
+        }
+        if (!nonterms.count(sym)) {
+            res.insert(sym);
+            allNullSoFar = false;
+            break;
+        } else {
+            auto it = first.find(sym);
+            if (it != first.end()) {
+                for (auto &x : it->second) if (x != EPSILON) res.insert(x);
+                if (it->second.count(EPSILON)) {
+                    allNullSoFar = true;
+                    continue;
+                } else { allNullSoFar = false; break; }
+            } else {
+                allNullSoFar = false;
+                break;
+            }
+        }
+    }
+    if (allNullSoFar) res.insert(EPSILON);
+    return res;
+}
+
+void computeFirst() {
+    for (auto &t : terms) first[t].insert(t);
+    for (auto &nt : nonterms) first[nt];
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto &p : prods) {
+            set<string> seqFirst = firstOfSequence(p.rhs);
+            for (auto &x : seqFirst) {
+                if (!first[p.lhs].count(x)) {
+                    first[p.lhs].insert(x);
                     changed = true;
                 }
             }
         }
     }
+}
 
-    void computeFirstSets() {
-        for (char nt : nonTerminals) firstSets[nt] = std::set<char>();
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            for (const auto& prod : grammar) {
-                char nt = prod.nonTerminal;
-                size_t original_size = firstSets[nt].size();
-                for (char symbol : prod.rule) {
-                    if (isNonTerminal(symbol)) {
-                        for (char first_sym : firstSets[symbol]) {
-                            firstSets[nt].insert(first_sym);
-                        }
-                        if (!nullable.at(symbol)) break;
-                    } else if (symbol != '#') {
-                        firstSets[nt].insert(symbol);
-                        break;
+void computeFollow(string startSymbol) {
+    for (auto &nt : nonterms) follow[nt];
+    follow[startSymbol].insert("$");
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        for (auto &p : prods) {
+            string A = p.lhs;
+            for (size_t i = 0; i < p.rhs.size(); i++) {
+                string B = p.rhs[i];
+                if (!nonterms.count(B)) continue;
+                vector<string> beta;
+                for (size_t j = i+1; j < p.rhs.size(); j++) beta.push_back(p.rhs[j]);
+                set<string> firstBeta = firstOfSequence(beta);
+                for (auto &t : firstBeta) {
+                    if (t != EPSILON && !follow[B].count(t)) {
+                        follow[B].insert(t);
+                        changed = true;
                     }
                 }
-                if (firstSets[nt].size() != original_size) changed = true;
-            }
-        }
-    }
-
-    void computeFollowSets() {
-        for (char nt : nonTerminals) followSets[nt] = std::set<char>();
-        followSets[augmentedStartSymbol].insert(END_MARKER);
-        bool changed = true;
-        while (changed) {
-            changed = false;
-            for (const auto& prod : grammar) {
-                for (size_t i = 0; i < prod.rule.length(); ++i) {
-                    char B = prod.rule[i];
-                    if (isNonTerminal(B)) {
-                        size_t original_size = followSets[B].size();
-                        std::string beta = prod.rule.substr(i + 1);
-                        
-                        bool betaIsNullable = true;
-                        for (char sym_beta : beta) {
-                           if(isNonTerminal(sym_beta)) {
-                               for(char t : firstSets[sym_beta]) followSets[B].insert(t);
-                               if(!nullable.at(sym_beta)){ betaIsNullable = false; break; }
-                           } else { 
-                               followSets[B].insert(sym_beta);
-                               betaIsNullable = false; break;
-                           }
+                if (firstBeta.count(EPSILON) || beta.empty()) {
+                    for (auto &f : follow[A]) {
+                        if (!follow[B].count(f)) {
+                            follow[B].insert(f);
+                            changed = true;
                         }
-
-                        if (betaIsNullable) {
-                            for (char t : followSets[prod.nonTerminal]) followSets[B].insert(t);
-                        }
-
-                        if (followSets[B].size() != original_size) changed = true;
                     }
                 }
             }
         }
     }
+}
 
-    void createParseTable() {
-        for (char nt : nonTerminals) {
-            for (char t : terminals) parseTable[nt][t] = -1;
-            parseTable[nt][END_MARKER] = -1;
+void buildPredictionTable(vector<pair<string,string>> &conflicts) {
+    for (auto &p : prods) {
+        set<string> seqFirst = firstOfSequence(p.rhs);
+        for (auto &t : seqFirst) {
+            if (t == EPSILON) continue;
+            if (M[p.lhs].count(t) && M[p.lhs][t] != p.id) {
+                conflicts.push_back({p.lhs, t});
+            }
+            M[p.lhs][t] = p.id;
         }
-
-        for (const auto& prod : grammar) {
-            char A = prod.nonTerminal;
-            std::string alpha = prod.rule;
-            std::set<char> first_of_alpha;
-            
-            bool is_alpha_nullable = true;
-            for(char sym : alpha){
-                if (sym == '#') continue;
-                if(isNonTerminal(sym)){
-                    first_of_alpha.insert(firstSets[sym].begin(), firstSets[sym].end());
-                    if(!nullable.at(sym)){ is_alpha_nullable = false; break; }
-                } else {
-                    first_of_alpha.insert(sym);
-                    is_alpha_nullable = false; break;
+        if (seqFirst.count(EPSILON)) {
+            for (auto &b : follow[p.lhs]) {
+                if (M[p.lhs].count(b) && M[p.lhs][b] != p.id) {
+                    conflicts.push_back({p.lhs, b});
                 }
-            }
-            if (alpha == "#") is_alpha_nullable = true;
-
-            for (char t : first_of_alpha) {
-                if (parseTable[A][t] != -1) std::cerr << "Conflict at Table[" << A << ", " << t << "]! Grammar not LL(1).\n";
-                parseTable[A][t] = prod.number;
-            }
-
-            if (is_alpha_nullable) {
-                for (char t : followSets[A]) {
-                    if (parseTable[A][t] != -1) std::cerr << "Conflict at Table[" << A << ", " << t << "] for nullable rule! Grammar not LL(1).\n";
-                    parseTable[A][t] = prod.number;
-                }
+                M[p.lhs][b] = p.id;
             }
         }
     }
+}
 
-    void parseString(const std::string& inputStr) {
-        std::string input = inputStr + END_MARKER;
-        std::stack<char> pdaStack;
-        pdaStack.push(END_MARKER);
-        pdaStack.push(augmentedStartSymbol);
+void printNullableFirstFollowTable() {
+    size_t wNT = 10, wNullable = 10, wFirst = 30, wFollow = 30;
+    cout << "\n+" << string(wNT,'-') << "+" << string(wNullable,'-') << "+"
+         << string(wFirst,'-') << "+" << string(wFollow,'-') << "+\n";
+    cout << "|" << setw(wNT) << left << " NonTerm"
+         << "|" << setw(wNullable) << left << " Nullable"
+         << "|" << setw(wFirst) << left << " First"
+         << "|" << setw(wFollow) << left << " Follow" << "|\n";
+    cout << "+" << string(wNT,'-') << "+" << string(wNullable,'-') << "+"
+         << string(wFirst,'-') << "+" << string(wFollow,'-') << "+\n";
+    for (auto &nt : nonterms) {
+        string fn = joinSet(first[nt]);
+        string fo = joinSet(follow[nt]);
+        cout << "|" << setw(wNT) << left << (" " + nt)
+             << "|" << setw(wNullable) << left << (nullable[nt] ? "True" : "False")
+             << "|" << setw(wFirst) << left << (" " + fn)
+             << "|" << setw(wFollow) << left << (" " + fo) << "|\n";
+    }
+    cout << "+" << string(wNT,'-') << "+" << string(wNullable,'-') << "+"
+         << string(wFirst,'-') << "+" << string(wFollow,'-') << "+\n";
+}
 
-        int ip = 0;
-        
-        std::cout << "\n--- PDA Simulation for input: \"" << inputStr << "\" ---\n";
-        std::vector<int> widths = {25, 25, 25};
-        printHorizontalLine(widths);
-        printRow({"Stack", "Input", "Action"}, widths);
-        printHorizontalLine(widths);
-
-        std::string lastAction = "";
-
-        while (!pdaStack.empty()) {
-            std::string stackStr;
-            std::stack<char> tempStack = pdaStack;
-            while(!tempStack.empty()) { stackStr = tempStack.top() + stackStr; tempStack.pop(); }
-            
-            printRow({stackStr, input.substr(ip), lastAction}, widths);
-
-            char top = pdaStack.top();
-            char currentInput = input[ip];
-
-            if (isNonTerminal(top)) {
-                if (parseTable.find(top) == parseTable.end() || parseTable.at(top).find(currentInput) == parseTable.at(top).end() || parseTable.at(top).at(currentInput) == -1) {
-                    lastAction = "ERROR: No rule!";
-                    printRow({stackStr, input.substr(ip), lastAction}, widths);
-                    break;
-                }
-                int ruleNum = parseTable.at(top).at(currentInput);
-                
-                Production prod_to_apply;
-                for(const auto& p : grammar) { if (p.number == ruleNum) { prod_to_apply = p; break; } }
-                
-                lastAction = "Apply " + std::string(1, top) + " -> " + prod_to_apply.rule;
-                
-                pdaStack.pop();
-                if (prod_to_apply.rule != "#") {
-                    for (int i = prod_to_apply.rule.length() - 1; i >= 0; --i) pdaStack.push(prod_to_apply.rule[i]);
-                }
-            } else { 
-                if (top == currentInput) {
-                    if (top == END_MARKER) {
-                        lastAction = "Success!";
-                        printRow({stackStr, input.substr(ip), lastAction}, widths);
-                        printHorizontalLine(widths);
-                        std::cout << "\n>>> String \"" << inputStr << "\" ACCEPTED by empty stack! <<<\n";
-                        return;
-                    }
-                    lastAction = "Match '" + std::string(1, top) + "'";
-                    pdaStack.pop();
-                    ip++;
-                } else {
-                    lastAction = "ERROR: Mismatch!";
-                    printRow({stackStr, input.substr(ip), lastAction}, widths);
-                    break;
-                }
+void printPredictionTable() {
+    set<string> termSet = terms;
+    termSet.insert("$");
+    vector<string> termsVec(termSet.begin(), termSet.end());
+    sort(termsVec.begin(), termsVec.end(), [](const string &a, const string &b){
+        if (a == "$") return false;
+        if (b == "$") return true;
+        return a < b;
+    });
+    int wNT = 8, wCol = 7;
+    cout << "\nPrediction Table (entries = production id)\n";
+    cout << "+" << string(wNT,'-') << "+";
+    for (size_t i=0;i<termsVec.size();i++) cout << string(wCol,'-') << "+";
+    cout << "\n";
+    cout << "|" << setw(wNT) << left << "NT";
+    for (auto &t : termsVec) cout << "|" << setw(wCol) << left << t;
+    cout << "|\n";
+    cout << "+" << string(wNT,'-') << "+";
+    for (size_t i=0;i<termsVec.size();i++) cout << string(wCol,'-') << "+";
+    cout << "\n";
+    for (auto &nt : nonterms) {
+        cout << "|" << setw(wNT) << left << nt;
+        for (auto &t : termsVec) {
+            string out = "";
+            auto itRow = M.find(nt);
+            if (itRow != M.end()) {
+                auto itCell = itRow->second.find(t);
+                if (itCell != itRow->second.end()) out = to_string(itCell->second);
             }
+            cout << "|" << setw(wCol) << left << out;
         }
-        printHorizontalLine(widths);
-        std::cout << "\n>>> String \"" << inputStr << "\" REJECTED. <<<\n";
+        cout << "|\n";
     }
+    cout << "+" << string(wNT,'-') << "+";
+    for (size_t i=0;i<termsVec.size();i++) cout << string(wCol,'-') << "+";
+    cout << "\n";
+}
 
-    void printNumberedProductions() {
-        std::cout << "\n--- Grammar Productions ---\n";
-        for (const auto& prod : grammar) {
-            // Start from 1 for user-facing productions
-            if (prod.number == 0) continue;
-            std::cout << "(" << prod.number << ") " << prod.nonTerminal << " -> " << prod.rule << std::endl;
-        }
-    }
+void printStepRow(int step, const string &stackStr, const string &inputRem, const string &action) {
+    int wStep = 6, wStack = 40, wInput = 20, wAction = 40;
+    cout << "| " << setw(wStep-1) << left << step
+         << "| " << setw(wStack-1) << left << stackStr
+         << "| " << setw(wInput-1) << left << inputRem
+         << "| " << setw(wAction-1) << left << action << "|\n";
+}
 
-    void printSets() {
-        std::cout << "\n--- Nullability, FIRST, and FOLLOW Sets ---\n";
-        std::vector<char> sortedNTs;
-        for(char nt : nonTerminals) sortedNTs.push_back(nt);
-        std::sort(sortedNTs.begin(), sortedNTs.end());
-
-        std::vector<int> widths = {18, 15, 25, 25};
-        printHorizontalLine(widths);
-        printRow({"Non-Terminal", "Nullable", "FIRST Set", "FOLLOW Set"}, widths);
-        printHorizontalLine(widths);
-
-        for (char nt : sortedNTs) {
-            std::string firstStr = "{ ";
-            for (char c : firstSets[nt]) { firstStr += c; firstStr += ", "; }
-            if (!firstSets[nt].empty()) firstStr.resize(firstStr.length() - 2);
-            firstStr += " }";
-
-            std::string followStr = "{ ";
-            for (char c : followSets[nt]) { followStr += c; followStr += ", "; }
-            if (!followSets[nt].empty()) followStr.resize(followStr.length() - 2);
-            followStr += " }";
-            
-            printRow({std::string(1, nt), (nullable[nt] ? "True" : "False"), firstStr, followStr}, widths);
-        }
-        printHorizontalLine(widths);
-    }
-
-    void printParseTable() {
-        std::cout << "\n--- LL(1) Prediction Table ---\n";
-        std::vector<char> tableTerminals;
-        for(char t : terminals) tableTerminals.push_back(t);
-        std::sort(tableTerminals.begin(), tableTerminals.end());
-        tableTerminals.push_back(END_MARKER);
-        
-        std::vector<int> widths = {5};
-        for(size_t i = 0; i < tableTerminals.size(); ++i) widths.push_back(5);
-
-        std::vector<std::string> header = {" "};
-        for(char t : tableTerminals) header.push_back(std::string(1,t));
-
-        printHorizontalLine(widths);
-        printRow(header, widths);
-        printHorizontalLine(widths);
-        
-        std::vector<char> sortedNTs;
-        for(char nt : nonTerminals) sortedNTs.push_back(nt);
-        std::sort(sortedNTs.begin(), sortedNTs.end());
-
-        for (char nt : sortedNTs) {
-            std::vector<std::string> row;
-            row.push_back(std::string(1, nt));
-            for (char t : tableTerminals) {
-                 int ruleNum = parseTable.count(nt) && parseTable.at(nt).count(t) ? parseTable.at(nt).at(t) : -1;
-                 if(ruleNum != -1) {
-                     row.push_back("(" + std::to_string(ruleNum) + ")");
-                 } else {
-                     row.push_back(" ");
-                 }
+void simulatePDA(const string &startSymbol, const string &userInput) {
+    string inp = userInput + "$";
+    vector<string> stack;
+    stack.push_back("$");
+    stack.push_back(startSymbol);
+    cout << "\n+" << string(6,'-') << "+" << string(40,'-') << "+"
+         << string(20,'-') << "+" << string(40,'-') << "+\n";
+    cout << "| " << setw(5) << left << "Step"
+         << "| " << setw(39) << left << "Stack"
+         << "| " << setw(19) << left << "Input"
+         << "| " << setw(39) << left << "Action" << "|\n";
+    cout << "+" << string(6,'-') << "+" << string(40,'-') << "+"
+         << string(20,'-') << "+" << string(40,'-') << "+\n";
+    int pos = 0, step = 1;
+    while (!stack.empty()) {
+        string stackStr;
+        for (int i = (int)stack.size()-1; i >= 0; i--) stackStr += "[" + stack[i] + "]";
+        string inputRem = inp.substr(pos);
+        string action = "-";
+        string top = stack.back();
+        if (!nonterms.count(top)) {
+            string look(1, inp[pos]);
+            if (top == look) {
+                stack.pop_back();
+                action = "Match '" + look + "'";
+                pos++;
+            } else {
+                action = "Mismatch top=" + top + " input=" + look;
+                printStepRow(step++, stackStr, inputRem, action);
+                cout << "+" << string(6,'-') << "+" << string(40,'-') << "+"
+                     << string(20,'-') << "+" << string(40,'-') << "+\n";
+                cout << "\nRejected ❌\n";
+                return;
             }
-            printRow(row, widths);
+            printStepRow(step++, stackStr, inputRem, action);
+            continue;
         }
-        printHorizontalLine(widths);
+        string look(1, inp[pos]);
+        if (M[top].count(look)) {
+            int pid = M[top][look];
+            auto prod = prods[pid];
+            string rhsdisp;
+            for (auto &t : prod.rhs) {
+                if (rhsdisp.size()) rhsdisp += " ";
+                rhsdisp += t;
+            }
+            action = "Apply (" + to_string(pid) + "): " + top + "->" + rhsdisp;
+            stack.pop_back();
+            if (!(prod.rhs.size() == 1 && prod.rhs[0] == EPSILON)) {
+                for (int j = (int)prod.rhs.size()-1; j >= 0; j--) stack.push_back(prod.rhs[j]);
+            }
+            printStepRow(step++, stackStr, inputRem, action);
+            continue;
+        } else {
+            action = "No table entry for " + top + "," + look;
+            printStepRow(step++, stackStr, inputRem, action);
+            cout << "+" << string(6,'-') << "+" << string(40,'-') << "+"
+                 << string(20,'-') << "+" << string(40,'-') << "+\n";
+            cout << "\nRejected ❌\n";
+            return;
+        }
     }
-};
+    cout << "+" << string(6,'-') << "+" << string(40,'-') << "+"
+         << string(20,'-') << "+" << string(40,'-') << "+\n";
+    if (pos == (int)inp.size()) cout << "\nAccepted ✅\n";
+    else cout << "\nRejected ❌\n";
+}
 
 int main() {
-    LL1Parser parser;
-    std::cout << "Enter grammar productions (e.g., S->aB, C->#), one per line.\n";
-    std::cout << "Type 'done' when finished:\n";
-    std::cout << "----------------------------------------------------------------\n";
-    std::string line;
-    while (std::getline(std::cin, line) && line != "done") {
-        if (!line.empty()) parser.addProduction(line);
+    int n;
+    cout << "Enter number of productions: ";
+    cin >> n;
+    vector<pair<string,string>> userProds;
+    for (int i = 0; i < n; i++) {
+        string line; cin >> line;
+        auto pos = line.find("->");
+        string lhs = line.substr(0,pos);
+        string rhs = line.substr(pos+2);
+        nonterms.insert(lhs);
+        userProds.push_back({lhs,rhs});
     }
-
-    char startSymbol;
-    std::cout << "Enter the start symbol: ";
-    std::cin >> startSymbol;
-    parser.setStartSymbol(startSymbol);
-
-    parser.initializeGrammar();
-    parser.computeNullability();
-    parser.computeFirstSets();
-    parser.computeFollowSets();
-    parser.createParseTable();
-
-    parser.printNumberedProductions();
-    parser.printSets();
-    parser.printParseTable();
-
-    std::string inputStr;
-    std::cout << "\nEnter a string to parse (or type 'quit' to exit): ";
-    while (std::cin >> inputStr && inputStr != "quit") {
-        parser.parseString(inputStr);
-        std::cout << "\nEnter another string to parse (or type 'quit' to exit): ";
+    for (int i = 0; i < (int)userProds.size(); i++) {
+        Production p;
+        p.id = i+1;
+        p.lhs = userProds[i].first;
+        p.rhs = tokenizeRHS(userProds[i].second);
+        prods.push_back(p);
     }
-
-    return 0;
+    string startSym = prods[0].lhs;
+    terms.insert("$");
+    computeNullable();
+    computeFirst();
+    computeFollow(startSym);
+    vector<pair<string,string>> conflicts;
+    buildPredictionTable(conflicts);
+    printNullableFirstFollowTable();
+    cout << "\nProductions:\n";
+    for (auto &p : prods) {
+        cout << "(" << p.id << ") " << p.lhs << " -> ";
+        for (int j=0;j<p.rhs.size();j++) {
+            if (j) cout << " ";
+            cout << p.rhs[j];
+        }
+        cout << "\n";
+    }
+    printPredictionTable();
+    while (true) {
+        cout << "\nEnter input string or 'exit': ";
+        string in; cin >> in;
+        if (in == "exit") break;
+        simulatePDA(startSym,in);
+    }
 }
